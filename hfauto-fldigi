@@ -1,0 +1,100 @@
+#!/usr/bin/perl
+
+# Periodically query fldigi for frequency and send XML to W1TR HFAuto
+# software.  This does the same thing as W1TR FLDIGI_UDP software except
+# that it works on Linux OS, doesn't have a GUI and uses command line options.
+#
+# Written Nov. 21, 2016 by Russell Dwarshuis
+
+use feature qw(say state);
+use strict;
+use Getopt::Std;
+use AnyEvent;
+use POE 'Loop::AnyEvent';
+use Ham::Fldigi;
+use IO::Socket::INET;
+use Regexp::Common 'net';
+
+getopts('dhp:i:P:I:');
+
+our ($opt_d,$opt_h,$opt_p,$opt_i,$opt_P,$opt_I);
+
+sub HELP_MESSAGE {
+  $Getopt::Std::STANDARD_HELP_VERSION = 1;
+  say <<EOHELP;
+Periodically  query fldigi for frequency and send XML to W1TR HFAuto
+software.
+
+options:
+
+-h, --help  You're reading it
+
+-i (Mandatory) IP address to export to that W1TR HFAuto sofware will listen on
+-p UDP port to export to that W1TR HFAuto software will listen on.  Defaults
+   to 12020
+
+-I IP Adress that fldigi will listen on.  Defaults to 127.0.0.1
+-P TCP Port that fldigi will listen on.  Defaults to 7362 (fldigi default)
+EOHELP
+  exit;
+}
+
+HELP_MESSAGE() if ($opt_h);
+
+my $debug = $opt_d;
+my $w_ip = $opt_i;
+my $w_port = $opt_p ? $opt_p : 12020;
+my $fl_ip = $opt_I ? $opt_i : '127.0.0.1';
+my $fl_port = $opt_P ? $opt_P : 7362;
+
+if ($w_ip !~ $RE{net}{IPv4}) {
+  say "Invalid or mising -i option $w_ip";
+  HELP_MESSAGE();
+}
+if ($fl_ip !~ $RE{net}{IPv4}) {
+  say "Invalid -I option $fl_ip";
+  HELP_MESSAGE();
+}
+if ($w_port !~ /^\d+$/ || $w_port > 65535) {
+  say "Invalid -p option $w_port";
+  HELP_MESSAGE();
+}
+if ($fl_port !~ /^\d+$/ || $fl_port > 65535) {
+  say "Invalid -P option $fl_port";
+  HELP_MESSAGE();
+}
+
+my $w = IO::Socket::INET->new(PeerAddr => $w_ip, 
+                              PeerPort => $w_port,
+                              Proto => 'udp',
+                              Blocking => 0);
+
+my $f = new Ham::Fldigi;
+my $fl_client = $f->client(Hostname => $fl_ip, Port => $fl_port, Name => '');
+die "Can't create fldigi client.  Is fldigi running?" unless $fl_client;
+
+my $cv = AnyEvent->condvar;
+my $timer = AnyEvent->timer (interval => .5, cb => \&query_fldigi);
+
+sub query_fldigi {
+  state $last_query_time = time;
+
+  my $response = $fl_client->command('main.get_frequency');
+  say "main.get_frequency fldigi query returned: $response" if $debug;
+  $last_query_time = time if $response;
+  if ($last_query_time + 10 < time) {
+    say "no fldigi response after 10 seconds" if $debug;
+    exit 1;
+  }
+
+  # HFAuto app requires integer frequency
+  $response = int $response;
+
+  # send the frequency to W1TR software
+  my $xml = "<FLDIGI><FREQ>$response</FREQ></FLDIGI>";
+  say "sending: $xml" if $debug;
+  say "Can't send to $w_ip port $w_port. Firewall issue?" unless $w->send($xml);
+}
+
+# start $timer running
+$cv->recv;
