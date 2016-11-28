@@ -1,0 +1,6 @@
+apt-get install cpanminus libmoose-perl libanyevent-perl libev-perl libpoe-perl
+apt-get install libdata-guid-perl librpc-xml-perl libtest-most-perl
+# had problems with POE, may have to use -n option if it hangs
+cpanm POE::Loop::AnyEvent
+cpanm Ham::Fldigi
+cpanm Regex::Common::Net
